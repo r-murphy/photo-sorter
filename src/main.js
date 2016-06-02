@@ -26,7 +26,7 @@ let argv = (
     // },
     "no-move": {
       boolean: true,
-      descibe: "Don't move the file (rename only)"
+      describe: "Don't move the file (rename only)"
     },
     "no-orig": {
       boolean: true,
@@ -39,8 +39,7 @@ let argv = (
     },
     verbose: {
       alias: "v",
-      boolean: true,
-      default: false
+      boolean: true
     }//,
     // recursive: {
     //   alias: "r",

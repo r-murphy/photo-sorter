@@ -1,7 +1,7 @@
 {
   "name": "photo-sorter",
   "version": "1.0.0",
-  "description": "Personal utility for sorting photos and movies, and renaming to combine from multiple sources",
+  "description": "Personal utility for sorting photos and movies, and renaming to combine from multiple sources.",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
