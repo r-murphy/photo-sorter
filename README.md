@@ -32,8 +32,8 @@ Options:
 ```
 
 The default behaviour is:
-- Rename the file as YYYYMMDD-HHmmss__<original>.ext
-- Move the file into a folder named as YYYY-MM
+- Rename the file as `YYYYMMDD-HHmmss__<original>.ext`
+- Move the file into a folder named as `YYYY-MM`
 
 
 ## TODO
