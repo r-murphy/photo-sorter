@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 "use strict"
 
-const yargs = require('yargs');
 const fs = require('fs');
 const fsp = require('fs-plus');
 const path = require('path');
+const util = require('util');
 const Promise = require("bluebird");
 //const exiftool = require('exiftool');
 // const metadata = Promise.promisify(exiftool.metadata.bind(exiftool));
@@ -13,89 +13,11 @@ const moment = require('moment');
 const fsRename = Promise.promisify(fs.rename);
 const fsList = Promise.promisify(fsp.list);
 
-let argv = (
-  yargs
-  .require(1)
-  .help('help')
-  // .demand('d')
-  .options({
-    // move: {
-    //   alias: "m",
-    //   choices: ["", "ym", "ymm", "ymd", "y"],
-    //   default: "ym"
-    // },
-    "no-move": {
-      boolean: true,
-      describe: "Don't move the file (rename only)"
-    },
-    "no-orig": {
-      boolean: true,
-      describe: "Don't add the original filename as a suffix"
-    },
-    "dry-run": {
-      alias: "n",
-      describe: "Dry Run",
-      boolean: true
-    },
-    verbose: {
-      alias: "v",
-      boolean: true
-    }//,
-    // recursive: {
-    //   alias: "r",
-    //   boolean: true,
-    //   default: false
-    // },
-    // flatten: {
-    //   boolean: true
-    // },
-    // output: {
-    //   alias: "o",
-    //   describe: "The base output directory"
-    // }
-  }).argv
-);
+const dirs = new Set();
 
-// console.log(require('util').inspect(argv, { depth: null }));
+let argv;
 
-let cwd = path.resolve(argv._[0] || process.cwd());
-console.log(cwd);
-
-function verbose() {
-  if (argv.verbose) {
-    var args = Array.prototype.slice.call(arguments);
-    if (argv.dryRun) {
-      args.unshift("Would");
-    }
-    console.log.apply(console, args);
-  }
-}
-
-let dirs = new Set();
-function mkdirIfNeeded(md) {
-  let dir = md.TargetFolder;
-  if (!dirs.has(dir)) {
-    dirs.add(dir);
-    if (!fs.existsSync(dir)) {
-      verbose("mkdir", dir);
-      if (!argv.dryRun) {
-        fs.mkdirSync(dir);
-      }
-    }
-  }
-}
-
-function moveFile(md) {
-  // console.log(require('util').inspect(md, { depth: null }));
-  let fileName = md.FileName;
-  let directory = md.Directory;
-  let targetPath = md.TargetPath;
-  var action = argv.noMove ? "rename" : "move";
-  verbose(action, fileName, "to", targetPath);
-  // console.log(argv.dryRun);
-  if (argv.dryRun) return;
-  return fsRename(path.join(directory, fileName), targetPath);
-}
+const globExtensions = [".jpg", ".mov", ".png", ".JPG", ".MOV", ".PNG"];
 
 const Types = {
   JPEG: {
@@ -112,12 +34,73 @@ const Types = {
   }
 };
 
+// const Filename_Formats = {
+//   DS: "IMG_YYYYMMDD_HHmmss" //Synology Diskstation
+// };
+
+function verbose() {
+  if (argv.verbose || argv.dryRun) {
+    const args = Array.prototype.slice.call(arguments);
+    if (argv.dryRun) {
+      args.unshift("Would");
+    }
+    console.log.apply(console, args);
+  }
+}
+
+function inspect(obj, depth) { //eslint-disable-line no-unused-vars
+  if (depth === undefined) depth = null;
+  console.log(util.inspect(obj, { depth: depth }));
+}
+
+function mkdirIfNeeded(md) {
+  // inspect(md);
+  const dir = md.TargetFolder;
+  if (!dirs.has(dir)) {
+    dirs.add(dir);
+    if (!fs.existsSync(dir)) {
+      verbose("mkdir", dir);
+      if (!argv.dryRun) {
+        fs.mkdirSync(dir);
+      }
+    }
+  }
+}
+
+function getNonconflictingTargetFilename(md) {
+  const originalTarget = md.TargetPath;
+  const targetParts = path.parse(originalTarget);
+  let targetPath = originalTarget;
+  let index = 0;
+  while (fs.existsSync(targetPath)) {
+    index++;
+    const pathWithoutExt = path.join(targetParts.dir, targetParts.name);
+    targetPath = `${pathWithoutExt} (${index})${targetParts.ext}`; //Let's hope there's not 2 files in the same second.
+  }
+  return targetPath;
+}
+
+function moveFile(md) {
+  const fileName = md.FileName;
+  const directory = md.Directory;
+  const targetPath = getNonconflictingTargetFilename(md);
+  if (argv.move) {
+    verbose("move", fileName, "to", targetPath); //TODO get relative path
+  }
+  else {
+    verbose("rename", fileName, "to", md.TargetName);
+  }
+  if (argv.dryRun) return;
+  const sourcePath = path.join(directory, fileName);
+  return fsRename(sourcePath, targetPath);
+}
+
 function getDate(md) {
   const type = md.FileType;
   const typeInfo = Types[type];
   if (!typeInfo) {
     console.log("Unknown type", type);
-    console.log(require('util').inspect(md, { depth: null }));
+    inspect(md);
     return null;
   }
   const string = md[typeInfo.tag];
@@ -129,45 +112,128 @@ function getDate(md) {
   }
 }
 
-function appTargetDetails(md) {
-  // console.log(require('util').inspect(md, { depth: null }));
+function determineTargetFilename(md) {
+  const sourceFilename = md.FileName;
+  if (!md.rename) {
+    return sourceFilename;
+  }
+  const date = md.moment;
+  const prefix = argv.prefix;
+  const suffix = argv.suffix;
+  const dateString = date.format("YYYYMMDD_HHmmss");
+  const sourceFileNameParts = path.parse(sourceFilename);
+  const targetNameBuffer = [];
+  targetNameBuffer.push(prefix);
+  const force = argv.force || !argv.appendOriginal;
+  const alreadyHasDate = sourceFilename.includes(dateString);
+  const alreadyHasPrefixAndDate = sourceFilename.startsWith(prefix) && alreadyHasDate;
+  if (alreadyHasPrefixAndDate && !force) {
+    console.log(`Skipping rename of ${sourceFilename} since appendOriginal is true and it contains the prefix and datestring.`);
+    return sourceFilename;
+  }
+  if (force || !sourceFilename.includes(dateString)) {
+    targetNameBuffer.push(dateString)
+  }
+  if (argv.appendOriginal) {
+    targetNameBuffer.push(`__${sourceFileNameParts.name}`); //no extension
+  }
+  targetNameBuffer.push(suffix);
+  return targetNameBuffer.join("") + sourceFileNameParts.ext
+}
+
+function mapTargetDetails(md) {
   const date = getDate(md);
-  const fileNameParts = path.parse(md.FileName);
-  if (date) {
-    if (!argv.noMove) {
-      const targetFolderName = date.format("YYYY-MM"); //TODO use argv
-      md.TargetFolder = path.resolve(cwd, targetFolderName);
-    }
-    else {
-      md.TargetFolder = md.Directory;
-    }
-    md.moment = date;
-    const targetNameBuffer = [date.format("YYYYMMDD-HHmmss")];
-    if (!argv.noOrig) {
-      targetNameBuffer.push(fileNameParts.name); //no extension
-    }
-    md.TargetName = targetNameBuffer.join("__") + fileNameParts.ext;
-    md.TargetPath = path.join(md.TargetFolder, md.TargetName);
+  if (!date) {
+    console.log("No date/time found for file", md.FileName);
     return md;
   }
-  console.log("No date/time found for file", md.FileName);
+  else {
+    md.moment = date;
+  }
+  if (argv.move) {
+    const targetFolderName = date.format("YYYY-MM"); //TODO use argv
+    md.TargetFolder = path.resolve(argv.cwd, targetFolderName);
+  }
+  else {
+    // Else we still need to set the directory for rename.
+    md.TargetFolder = md.Directory;
+  }
+  md.TargetName = determineTargetFilename(md);
+  md.TargetPath = path.join(md.TargetFolder, md.TargetName);
   return md;
 }
 
 function getMetadata(files) {
-  return exiftool.metadata({
-    source: files,
-    // tags: ["FileType", "FileName", "Directory", "DateTimeOriginal", "CreationDate", "DateCreated"]
-  });
+  if (!files.length) return [];
+  // Wrap the exiftool call in a promise to catch any sync errors
+  return Promise.resolve()
+    .then(() => {
+      return exiftool.metadata({
+        source: files,
+        // tags: ["FileType", "FileName", "Directory", "DateTimeOriginal", "CreationDate", "DateCreated"]
+      });
+    })
+    .catch(error => {
+      console.log(`Error processing one of:\n${files.join("\n")}`);
+      throw error;
+    });
 }
 
-fsList(cwd, [".JPG", ".MOV", ".PNG"])
-  .then(files => getMetadata(files))
-  .map(md => appTargetDetails(md))
-  .filter(md => !!md.TargetPath)
-  .each(md => mkdirIfNeeded(md))
-  .each(md => moveFile(md))
-  .then(() => console.log("Done"))
-  .catch(error => {
-    console.error(error);
-  });
+function takeActionFilter(md) {
+  if (!md.TargetPath) {
+    // verbose(`Unable to determine date for ${md.FileName}`);
+    return false;
+  }
+  else if (md.SourceFile === md.TargetPath) {
+    verbose(`No filename change for ${md.FileName}`);
+    return false;
+  }
+  return true;
+}
+
+function filterDotFiles(file) {
+  return !file.startsWith(".")
+}
+
+function applyLimit(files) {
+  if (argv.limit) {
+    return files.slice(0, argv.limit);
+  }
+  else {
+    return files;
+  }
+}
+
+// exports.rename = function(args) {
+//   argv = args;
+//   return fsList(argv.cwd, globExtensions)
+//     .then(files => getMetadata(files))
+//     .map(md => mapTargetDetails(md))
+//     .filter(md => noActionFilter(md))
+//     .each(md => mkdirIfNeeded(md))
+//     .each(md => moveFile(md))
+//     .then(() => console.log("Done"));
+// }
+
+exports.organize = function(args) {
+  if (args.verbose || args.dryRun) {
+    inspect(args)
+  }
+  argv = args;
+  return fsList(argv.cwd, globExtensions)
+    // .tap(inspect)
+    .filter(file => filterDotFiles(file))
+    // .tap(inspect)
+    .then(files => applyLimit(files))
+    // .tap(inspect)
+    .then(files => getMetadata(files))
+    // .tap(inspect)
+    .map(md => mapTargetDetails(md))
+    // .tap(inspect)
+    .filter(md => takeActionFilter(md))
+    // .tap(inspect)
+    .each(md => mkdirIfNeeded(md))
+    // .tap(inspect)
+    .each(md => moveFile(md))
+    .then(files => console.log(`Done. Processed ${files.length} files.`));
+}
