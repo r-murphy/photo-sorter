@@ -5,7 +5,6 @@ const yargs = require('yargs');
 const path = require('path');
 const main = require('../src/main');
 
-// Note: yargs boolean-negation has been disabled in package.json
 const argv = (
   yargs
   .require(1)
